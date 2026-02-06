@@ -15,7 +15,7 @@ class SelfAttention(nn.Module):
 
         self.out = nn.Linear(embed_dim, embed_dim)
 
-    def forward(self, x):
+    def forward(self, x, return_attention=False):
         B, T, C = x.shape
 
         q = self.q(x).view(B, T, self.heads, self.head_dim)
@@ -35,7 +35,13 @@ class SelfAttention(nn.Module):
         out = attn @ v
 
         out = out.transpose(1, 2).contiguous().view(B, T, C)
-        return self.out(out)
+        out = self.out(out)
+
+        if return_attention:
+            return out, attn
+
+        return out
+
 
 # ---- Feed Forward ----
 class FeedForward(nn.Module):
@@ -59,10 +65,17 @@ class Block(nn.Module):
         self.ln1 = nn.LayerNorm(embed_dim)
         self.ln2 = nn.LayerNorm(embed_dim)
 
-    def forward(self, x):
+    def forward(self, x, return_attention=False):
+        if return_attention:
+            attn_out, attn_weights = self.attn(self.ln1(x), True)
+            x = x + attn_out
+            x = x + self.ff(self.ln2(x))
+            return x, attn_weights
+
         x = x + self.attn(self.ln1(x))
         x = x + self.ff(self.ln2(x))
         return x
+
 
 # ---- Full LM ----
 class TransformerLM(nn.Module):
@@ -79,15 +92,28 @@ class TransformerLM(nn.Module):
         self.ln = nn.LayerNorm(embed_dim)
         self.fc = nn.Linear(embed_dim, vocab_size)
 
-    def forward(self, x):
+    def forward(self, x, return_attention=False):
         B, T = x.shape
 
         tok = self.token_embed(x)
         pos = self.pos_embed(torch.arange(T, device=x.device))
 
         x = tok + pos
-        x = self.blocks(x)
-        x = self.ln(x)
 
+        attentions = []
+
+        for block in self.blocks:
+            if return_attention:
+                x, attn = block(x, True)
+                attentions.append(attn)
+            else:
+                x = block(x)
+
+        x = self.ln(x)
         logits = self.fc(x)
+
+        if return_attention:
+            return logits, attentions
+
         return logits
+
